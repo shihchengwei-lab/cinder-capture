@@ -19,17 +19,36 @@ READ_PS1 = SCRIPT_DIR / "read_terminal.ps1"
 RAW_TEXT_PATH = SCRIPT_DIR / ".terminal_raw.txt"
 
 
-def read_terminal_text() -> str | None:
-    """Call PowerShell to read terminal text via UIAutomation."""
-    result = subprocess.run(
-        [
-            "powershell", "-ExecutionPolicy", "Bypass",
-            "-File", str(READ_PS1),
-            "-OutputPath", str(RAW_TEXT_PATH),
-        ],
-        capture_output=True,
-        timeout=10,
+def find_terminal_pid() -> int:
+    """Walk up process tree to find the ancestor WindowsTerminal.exe PID."""
+    cmd = (
+        f"$p={os.getpid()};"
+        "for($i=0;$i -lt 15;$i++){"
+        '$proc=Get-CimInstance Win32_Process -Filter "ProcessId=$p" -ErrorAction SilentlyContinue;'
+        "if(-not $proc){break}"
+        "if($proc.Name -eq 'WindowsTerminal.exe'){$p;exit 0}"
+        "$p=$proc.ParentProcessId"
+        "};exit 1"
     )
+    result = subprocess.run(
+        ["powershell", "-ExecutionPolicy", "Bypass", "-Command", cmd],
+        capture_output=True, text=True, timeout=10,
+    )
+    if result.returncode == 0 and result.stdout.strip().isdigit():
+        return int(result.stdout.strip())
+    return 0
+
+
+def read_terminal_text(terminal_pid: int = 0) -> str | None:
+    """Call PowerShell to read terminal text via UIAutomation."""
+    args = [
+        "powershell", "-ExecutionPolicy", "Bypass",
+        "-File", str(READ_PS1),
+        "-OutputPath", str(RAW_TEXT_PATH),
+    ]
+    if terminal_pid > 0:
+        args += ["-TerminalPid", str(terminal_pid)]
+    result = subprocess.run(args, capture_output=True, timeout=10)
     if result.returncode != 0:
         return None
     if not RAW_TEXT_PATH.exists():
@@ -144,20 +163,17 @@ def main():
             except json.JSONDecodeError:
                 pass
 
+    terminal_pid = find_terminal_pid()
+
     # Poll for a NEW bubble instead of blind-waiting
     time.sleep(initial_delay)
     for attempt in range(max_attempts):
-        text = read_terminal_text()
+        text = read_terminal_text(terminal_pid)
         if text:
             bubble = extract_bubble(text)
             if bubble and len(bubble) >= 3 and bubble != last_known:
                 # Found a new bubble
-                written = append_log(log_path, bubble)
-                if written:
-                    readable_path = Path(log_path).with_suffix(".txt")
-                    with open(readable_path, "a", encoding="utf-8") as f:
-                        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                        f.write(f"[{ts}] {bubble}\n")
+                append_log(log_path, bubble)
                 return
         time.sleep(poll_interval)
 

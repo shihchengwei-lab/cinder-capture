@@ -3,7 +3,8 @@
 param(
     [string]$OutputPath = "$PSScriptRoot\.terminal_raw.txt",
     [string]$TerminalClass = "CASCADIA_HOSTING_WINDOW_CLASS",
-    [string]$TermCtrlClass = "TermControl"
+    [string]$TermCtrlClass = "TermControl",
+    [int]$TerminalPid = 0
 )
 
 Add-Type -AssemblyName UIAutomationClient
@@ -11,21 +12,39 @@ Add-Type -AssemblyName UIAutomationTypes
 
 $root = [System.Windows.Automation.AutomationElement]::RootElement
 
-# Find Windows Terminal
-$termCond = New-Object System.Windows.Automation.PropertyCondition(
-    [System.Windows.Automation.AutomationElement]::ClassNameProperty, $TerminalClass
-)
-$terminal = $root.FindFirst([System.Windows.Automation.TreeScope]::Children, $termCond)
+# Find Windows Terminal — by PID if provided, fallback to class name
+$terminal = $null
+if ($TerminalPid -gt 0) {
+    $pidCond = New-Object System.Windows.Automation.PropertyCondition(
+        [System.Windows.Automation.AutomationElement]::ProcessIdProperty, $TerminalPid
+    )
+    $terminal = $root.FindFirst([System.Windows.Automation.TreeScope]::Children, $pidCond)
+}
+if (-not $terminal) {
+    $termCond = New-Object System.Windows.Automation.PropertyCondition(
+        [System.Windows.Automation.AutomationElement]::ClassNameProperty, $TerminalClass
+    )
+    $terminal = $root.FindFirst([System.Windows.Automation.TreeScope]::Children, $termCond)
+}
 if (-not $terminal) { exit 1 }
 
-# Find TermControl
+# Find TermControl — pick the active tab (not offscreen)
 $ctrlCond = New-Object System.Windows.Automation.PropertyCondition(
     [System.Windows.Automation.AutomationElement]::ClassNameProperty, $TermCtrlClass
 )
-$termControl = $terminal.FindFirst(
+$allControls = $terminal.FindAll(
     [System.Windows.Automation.TreeScope]::Descendants, $ctrlCond
 )
-if (-not $termControl) { exit 1 }
+if ($allControls.Count -eq 0) { exit 1 }
+
+$termControl = $null
+foreach ($ctrl in $allControls) {
+    if (-not $ctrl.Current.IsOffscreen) {
+        $termControl = $ctrl
+        break
+    }
+}
+if (-not $termControl) { $termControl = $allControls[0] }
 
 # Read text
 try {
