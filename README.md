@@ -81,6 +81,48 @@ Claude 回答完成
 
 ---
 
+## Quick Verify — 先確認你的環境能不能跑
+
+Clone 後一條指令檢查所有前提條件：
+
+```powershell
+git clone https://github.com/shihchengwei-lab/cinder-capture.git
+cd cinder-capture
+powershell -ExecutionPolicy Bypass -File verify.ps1
+```
+
+你會看到類似這樣的輸出：
+
+```
+=== cinder-capture environment check ===
+
+  [PASS] Windows OS
+  [PASS] Python 3.x
+  [PASS] UIAutomation assemblies
+  [PASS] Windows Terminal running
+  [PASS] TermControl TextPattern readable    83408 chars in buffer
+  [PASS] Cinder companion detected           Label + bubble border found
+  [PASS] Claude Code CLI
+  [PASS] Bash available
+
+=== Result ===
+  9 passed, 0 failed, 0 warnings
+
+  Ready to use cinder-capture!
+```
+
+**全 PASS 才能繼續安裝。** 如果有 FAIL，先解決對應的問題。
+
+### 前提條件
+
+- Windows 10/11
+- Windows Terminal（不是舊版 cmd.exe 或 ConHost）
+- Python 3.x（PATH 中可用）
+- Claude Code CLI（有 companion 功能）
+- Bash（Git Bash 即可）
+
+---
+
 ## 安裝步驟
 
 ### 1. 建立 `cinder-capture/` 目錄
