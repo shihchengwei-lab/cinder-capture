@@ -119,29 +119,40 @@ def main():
     with open(CONFIG_PATH, "r", encoding="utf-8") as f:
         config = json.load(f)
 
-    delay = config.get("delay_seconds", 6)
+    initial_delay = config.get("delay_seconds", 4)
     log_path = config.get("log_path", str(Path.home() / ".claude" / "cinder_log.jsonl"))
+    max_attempts = config.get("max_attempts", 6)
+    poll_interval = config.get("poll_interval", 2)
 
-    # Wait for Cinder to finish rendering
-    time.sleep(delay)
+    # Load last known bubble to detect new ones
+    last_known = ""
+    log_file = Path(log_path)
+    if log_file.exists():
+        content = log_file.read_text(encoding="utf-8").strip()
+        if content:
+            try:
+                last_known = json.loads(content.split("\n")[-1]).get("text", "")
+            except json.JSONDecodeError:
+                pass
 
-    # Read terminal text
-    text = read_terminal_text()
-    if not text:
-        return
+    # Poll for a NEW bubble instead of blind-waiting
+    time.sleep(initial_delay)
+    for attempt in range(max_attempts):
+        text = read_terminal_text()
+        if text:
+            bubble = extract_bubble(text)
+            if bubble and len(bubble) >= 3 and bubble != last_known:
+                # Found a new bubble
+                written = append_log(log_path, bubble)
+                if written:
+                    readable_path = Path(log_path).with_suffix(".txt")
+                    with open(readable_path, "a", encoding="utf-8") as f:
+                        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        f.write(f"[{ts}] {bubble}\n")
+                return
+        time.sleep(poll_interval)
 
-    # Extract bubble
-    bubble = extract_bubble(text)
-    if not bubble or len(bubble) < 3:
-        return
-
-    # Write to log
-    written = append_log(log_path, bubble)
-    if written:
-        readable_path = Path(log_path).with_suffix(".txt")
-        with open(readable_path, "a", encoding="utf-8") as f:
-            ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            f.write(f"[{ts}] {bubble}\n")
+    # No new bubble found after polling — nothing to write
 
 
 if __name__ == "__main__":
