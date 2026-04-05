@@ -49,15 +49,23 @@ def extract_bubble(text: str) -> str:
     lines = text.split("\n")
 
     # Search from bottom for the bubble closing border (╰...╯)
-    # It's usually on the same line as "Cinder" label or very near it
+    # Must be near the "Cinder" label to avoid matching unrelated box-drawing
     bubble_bottom = -1
     bubble_top = -1
 
     for i in range(len(lines) - 1, max(0, len(lines) - 50) - 1, -1):
         line = lines[i]
-        if "╰" in line and "╯" in line:
+        if "╰" in line and "╯" in line and "Cinder" in line:
             bubble_bottom = i
             break
+    # Fallback: ╰╯ within 2 lines of a "Cinder" label
+    if bubble_bottom < 0:
+        for i in range(len(lines) - 1, max(0, len(lines) - 50) - 1, -1):
+            if "╰" in lines[i] and "╯" in lines[i]:
+                nearby = " ".join(lines[i:min(len(lines), i + 3)])
+                if "Cinder" in nearby:
+                    bubble_bottom = i
+                    break
 
     if bubble_bottom < 0:
         return ""
@@ -78,7 +86,8 @@ def extract_bubble(text: str) -> str:
         line = lines[i]
         # Extract text between │ delimiters
         # The line may have other content after the closing │ (goose art, separator, etc.)
-        match = re.search(r"│\s*(.*?)\s*│", line)
+        # Greedy match: grab everything between the FIRST and LAST │ on the line
+        match = re.search(r"│\s*(.*)\s*│", line)
         if match:
             text_part = match.group(1).strip()
             if text_part:
