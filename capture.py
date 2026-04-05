@@ -1,12 +1,11 @@
-"""capture.py — Read terminal text via UIAutomation, extract Cinder bubble, write to log.
+"""capture.py — Read terminal text via UIAutomation, extract companion bubble, write to log.
 
 Called by Stop hook via run_capture.sh (background, non-blocking).
 
-Cinder bubble format (rendered by Ink TUI) uses box-drawing chars:
-    top border, content lines with vertical bars, bottom border + "Cinder" label.
+Companion bubble format (rendered by Ink TUI) uses box-drawing chars:
+    top border, content lines with vertical bars, bottom border + companion label.
 """
 import json
-import os
 import re
 import subprocess
 import time
@@ -19,70 +18,55 @@ READ_PS1 = SCRIPT_DIR / "read_terminal.ps1"
 RAW_TEXT_PATH = SCRIPT_DIR / ".terminal_raw.txt"
 
 
-def find_terminal_pid() -> int:
-    """Walk up process tree to find the ancestor WindowsTerminal.exe PID."""
-    cmd = (
-        f"$p={os.getpid()};"
-        "for($i=0;$i -lt 15;$i++){"
-        '$proc=Get-CimInstance Win32_Process -Filter "ProcessId=$p" -ErrorAction SilentlyContinue;'
-        "if(-not $proc){break}"
-        "if($proc.Name -eq 'WindowsTerminal.exe'){$p;exit 0}"
-        "$p=$proc.ParentProcessId"
-        "};exit 1"
-    )
-    result = subprocess.run(
-        ["powershell", "-ExecutionPolicy", "Bypass", "-Command", cmd],
-        capture_output=True, text=True, timeout=10,
-    )
-    if result.returncode == 0 and result.stdout.strip().isdigit():
-        return int(result.stdout.strip())
-    return 0
+def read_all_terminals(terminal_class: str, term_ctrl_class: str) -> list[str]:
+    """Call PowerShell to read text from all terminal windows via UIAutomation.
 
-
-def read_terminal_text(terminal_pid: int = 0) -> str | None:
-    """Call PowerShell to read terminal text via UIAutomation."""
+    Returns a list of text segments, one per terminal window.
+    """
     args = [
         "powershell", "-ExecutionPolicy", "Bypass",
         "-File", str(READ_PS1),
         "-OutputPath", str(RAW_TEXT_PATH),
+        "-TerminalClass", terminal_class,
+        "-TermCtrlClass", term_ctrl_class,
     ]
-    if terminal_pid > 0:
-        args += ["-TerminalPid", str(terminal_pid)]
-    result = subprocess.run(args, capture_output=True, timeout=10)
+    result = subprocess.run(args, capture_output=True, timeout=15)
     if result.returncode != 0:
-        return None
+        return []
     if not RAW_TEXT_PATH.exists():
-        return None
-    return RAW_TEXT_PATH.read_text(encoding="utf-8")
+        return []
+    raw = RAW_TEXT_PATH.read_text(encoding="utf-8")
+    segments = raw.split("\n===TERMINAL_SEPARATOR===\n")
+    return [s for s in segments if s.strip()]
 
 
-def extract_bubble(text: str) -> str:
-    """Extract Cinder's speech bubble text from terminal output.
+def extract_bubble(text: str, marker: str = "Cinder") -> str:
+    """Extract companion's speech bubble text from terminal output.
 
     Looks for the box-drawing pattern:
         ╭──...──╮
         │ text  │
         ╰──...──╯
-    in the last portion of the terminal text.
+    near the companion label (marker) in the last portion of the terminal text.
     """
     lines = text.split("\n")
 
     # Search from bottom for the bubble closing border (╰...╯)
-    # Must be near the "Cinder" label to avoid matching unrelated box-drawing
+    # Must be near the companion label to avoid matching unrelated box-drawing
     bubble_bottom = -1
     bubble_top = -1
 
     for i in range(len(lines) - 1, max(0, len(lines) - 50) - 1, -1):
         line = lines[i]
-        if "╰" in line and "╯" in line and "Cinder" in line:
+        if "╰" in line and "╯" in line and marker in line:
             bubble_bottom = i
             break
-    # Fallback: ╰╯ within 2 lines of a "Cinder" label
+    # Fallback: ╰╯ within 2 lines of the companion label
     if bubble_bottom < 0:
         for i in range(len(lines) - 1, max(0, len(lines) - 50) - 1, -1):
             if "╰" in lines[i] and "╯" in lines[i]:
                 nearby = " ".join(lines[i:min(len(lines), i + 3)])
-                if "Cinder" in nearby:
+                if marker in nearby:
                     bubble_bottom = i
                     break
 
@@ -100,12 +84,10 @@ def extract_bubble(text: str) -> str:
         return ""
 
     # Extract text from │...│ lines between top and bottom
+    # Greedy match: grab everything between the FIRST and LAST │ on the line
     content_lines = []
     for i in range(bubble_top + 1, bubble_bottom):
         line = lines[i]
-        # Extract text between │ delimiters
-        # The line may have other content after the closing │ (goose art, separator, etc.)
-        # Greedy match: grab everything between the FIRST and LAST │ on the line
         match = re.search(r"│\s*(.*)\s*│", line)
         if match:
             text_part = match.group(1).strip()
@@ -151,6 +133,9 @@ def main():
     log_path = config.get("log_path", str(Path.home() / ".claude" / "cinder_log.jsonl"))
     max_attempts = config.get("max_attempts", 6)
     poll_interval = config.get("poll_interval", 2)
+    terminal_class = config.get("terminal_class", "CASCADIA_HOSTING_WINDOW_CLASS")
+    term_ctrl_class = config.get("term_control_class", "TermControl")
+    marker = config.get("cinder_marker", "Cinder")
 
     # Load last known bubble to detect new ones
     last_known = ""
@@ -163,16 +148,13 @@ def main():
             except json.JSONDecodeError:
                 pass
 
-    terminal_pid = find_terminal_pid()
-
     # Poll for a NEW bubble instead of blind-waiting
     time.sleep(initial_delay)
     for attempt in range(max_attempts):
-        text = read_terminal_text(terminal_pid)
-        if text:
-            bubble = extract_bubble(text)
+        segments = read_all_terminals(terminal_class, term_ctrl_class)
+        for segment in segments:
+            bubble = extract_bubble(segment, marker)
             if bubble and len(bubble) >= 3 and bubble != last_known:
-                # Found a new bubble
                 append_log(log_path, bubble)
                 return
         time.sleep(poll_interval)

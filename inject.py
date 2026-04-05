@@ -54,7 +54,7 @@ def main():
         return
 
     # Output additionalContext — use print + flush to ensure delivery
-    output = json.dumps({"additionalContext": f"[Cinder] {text}"}, ensure_ascii=True)
+    output = json.dumps({"additionalContext": f"[Cinder] {text}"}, ensure_ascii=False)
     sys.stdout.write(output)
     sys.stdout.flush()
 

@@ -2,5 +2,7 @@
   "delay_seconds": 4,
   "log_path": "C:/Users/YOUR_USERNAME/.claude/cinder_log.jsonl",
   "terminal_class": "CASCADIA_HOSTING_WINDOW_CLASS",
-  "term_control_class": "TermControl"
+  "term_control_class": "TermControl",
+  "cinder_marker": "Cinder",
+  "inject_max_age_seconds": 120
 }
