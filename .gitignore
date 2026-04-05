@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+.terminal_raw.txt
+.prev_snapshot.txt
+inject_debug.*

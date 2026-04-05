@@ -1,0 +1,10 @@
+{
+  "delay_seconds": 6,
+  "log_path": "C:/Users/YOUR_USERNAME/.claude/cinder_log.jsonl",
+  "prev_snapshot_path": "C:/Users/YOUR_USERNAME/cinder-capture/.prev_snapshot.txt",
+  "terminal_class": "CASCADIA_HOSTING_WINDOW_CLASS",
+  "term_control_class": "TermControl",
+  "cinder_marker": "Cinder",
+  "tail_lines": 40,
+  "inject_max_age_seconds": 120
+}
