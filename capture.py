@@ -84,7 +84,8 @@ def extract_bubble(text: str) -> str:
             if text_part:
                 content_lines.append(text_part)
 
-    return "".join(content_lines).strip()
+    # Join with space — bubble lines are word-wrapped, not separate sentences
+    return " ".join(content_lines).strip()
 
 
 def append_log(log_path: str, text: str) -> bool:
