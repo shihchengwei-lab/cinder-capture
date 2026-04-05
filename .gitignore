@@ -3,3 +3,4 @@ __pycache__/
 .terminal_raw.txt
 .prev_snapshot.txt
 inject_debug.*
+config.json
