@@ -77,10 +77,12 @@ Claude 回答完成
 
 下一輪你送 prompt
   → UserPromptSubmit hook 觸發 inject.py
-  → 讀 cinder_log.jsonl 最後一筆（過濾 120 秒內）
-  → 純文字 [Cinder] ... 寫到 stdout
-  → harness 把它當 additionalContext 塞進 prompt
-  → Claude 在這輪 prompt 就「自然地」看到 Cinder 上一輪說的話
+  → 讀 cinder_log.jsonl 中所有 watermark 之後的 entries
+  → 丟掉 8 小時以前的（絕對天花板，跨 session 防呆）
+  → 多筆以 [Cinder] (相對時間) ... 形式寫到 stdout
+  → 更新 watermark 檔案，確保每筆只注入一次
+  → harness 把 stdout 當 additionalContext 塞進 prompt
+  → Claude 在這輪 prompt 自然看到 Cinder 累積的脈絡
 ```
 
 ---
@@ -147,11 +149,14 @@ cd cinder-capture
   "terminal_class": "CASCADIA_HOSTING_WINDOW_CLASS",
   "term_control_class": "TermControl",
   "cinder_marker": "Cinder",
-  "inject_max_age_seconds": 120
+  "inject_max_age_seconds": 28800,
+  "inject_max_entries": 10
 }
 ```
 
 把 `YOUR_USERNAME` 換成你的 Windows 使用者名稱。如果你的 companion 不叫 Cinder，把 `cinder_marker` 改成你的 companion 名稱。
+
+`inject_max_age_seconds` 是「絕對天花板」——超過這個秒數的 Cinder 訊息會被當成跨 session 的舊話丟掉。預設 8 小時（28800 秒）對應「一個工作 session 的長度上限」，設太短會在你切視窗滑 YouTube / 出門回來時漏抓。`inject_max_entries` 限制單次注入最多幾筆，避免長時間累積後一次塞爆 context。
 
 ### 3. `read_terminal.ps1` — PowerShell UIAutomation 讀取器
 
@@ -415,12 +420,18 @@ exit 0
 
 `inject.py`（已包含在 repo 中）會在你每次按 Enter 送出 prompt 時：
 
-1. 讀 `cinder_log.jsonl` 最後一筆
-2. 過濾 `inject_max_age_seconds`（預設 120 秒）以外的舊訊息，避免你看到隔天的舊話
-3. 把 `[Cinder] <bubble 文字>` 純文字寫到 stdout
-4. Claude Code harness 把這段 stdout 當 `additionalContext` 塞進 prompt
+1. 讀 watermark 檔（`cinder_log.jsonl.watermark`），知道上次注入到哪一筆
+2. 撈出所有 timestamp **新於 watermark** 且 **在 8 小時內**（`inject_max_age_seconds` 預設 28800）的 entries
+3. 取最後 N 筆（`inject_max_entries` 預設 10），避免你長時間離開後一口氣塞爆 context
+4. 每筆以 `[Cinder] (相對時間) <bubble 文字>` 格式寫到 stdout，例如：
+   ```
+   [Cinder] (5 min ago) 嘎——這個 default 999 是嘴硬
+   [Cinder] (just now) 嘎——孤兒函式還在那詐屍
+   ```
+5. 把 watermark 推到最新一筆的 timestamp，確保下次不會重複注入
+6. Claude Code harness 把整段 stdout 當 `additionalContext` 塞進 prompt
 
-Claude 這輪就會自然看到 Cinder 上一輪說了什麼，不需要你或 Claude 主動 tail。
+Claude 這輪就會自然看到 Cinder **累積的脈絡**——不只最後一句，而是上次以後 Cinder 說過的所有話。多輪論述（例如「default 嘴硬 → NOT NULL 防呆 → 孤兒函式詐屍」這種連串糾正）的因果鏈不會被砍斷。
 
 > 💡 早期版本的本 repo 誤以為「`additionalContext` 對 command 型 hook 不生效」。實際測試後確認：command 型 UserPromptSubmit hook 只要把純文字寫到 stdout 並 exit 0，harness 就會把它注入為 context。詳見 [Claude Code 官方 hook 文件](https://code.claude.com/docs/en/hooks.md) 的 "Add context to the conversation" 範例。
 
@@ -450,8 +461,9 @@ Claude 這輪就會自然看到 Cinder 上一輪說了什麼，不需要你或 C
 5. **Python 逐視窗解析泡泡**：找 `╭╮` 頂部 → `││` 內容 → `╰╯` 底部 + companion 標籤
 6. **去重後寫入 `cinder_log.jsonl`**
 7. **下一輪你送 prompt** → UserPromptSubmit hook 觸發 `inject.py`
-8. **`inject.py` 讀 log 最後一筆**（過濾 120 秒內），純文字 `[Cinder] ...` 寫到 stdout
-9. **Claude Code harness 把 stdout 當 `additionalContext` 塞進 prompt**，Claude 自然看到 Cinder 上一輪說的話
+8. **`inject.py` 讀 watermark 檔**，撈所有新於 watermark 且 8 小時內的 entries
+9. **多筆以 `[Cinder] (相對時間) ...` 寫到 stdout**，並更新 watermark 防止重複注入
+10. **Claude Code harness 把 stdout 當 `additionalContext` 塞進 prompt**，Claude 自然看到 Cinder 累積的脈絡
 
 ---
 
@@ -474,7 +486,9 @@ Claude 這輪就會自然看到 Cinder 上一輪說了什麼，不需要你或 C
 - **僅限 Windows Terminal**：依賴 `CASCADIA_HOSTING_WINDOW_CLASS` 和 `TermControl` 的 UIAutomation 支援
 - **輪詢延遲**：需要等 Cinder 渲染完成。如果 Cinder 的 API 回應特別慢，可能需要調高 `delay_seconds` 或 `max_attempts`
 - **泡泡消失問題**：如果你在 Cinder 泡泡出現前就開始打字，泡泡可能被新內容擠掉
-- **時序競態**：Stop hook 的 capture 輪詢窗口約 16 秒。如果你在 Cinder 完成 API 呼叫前就送下一個 prompt，inject.py 可能會抓到「上一輪」的訊息而不是「剛結束這一輪」的
+- **時序競態**：Stop hook 的 capture 輪詢窗口約 16 秒。如果你在 Cinder 完成這一輪 API 呼叫前就送下一個 prompt，inject.py 會錯過這一輪的 bubble——但因為 watermark 會記住，**下一次** prompt 就會把它補上，不會永久遺失
+- **8 小時硬天花板**：超過 8 小時的 Cinder 訊息會被視為跨 session 舊話丟掉。如果你需要更長的記憶（例如「過夜放著跑、隔天回來看」），調高 `inject_max_age_seconds`
+- **watermark 檔案**：`cinder_log.jsonl.watermark` 跟 log 同目錄，內容是上次注入到的 ISO timestamp。手動刪除會讓下一次 prompt 重新撈最近 N 筆 entries
 - **macOS 不適用**：需要另外實作（用 macOS Accessibility API 替代 UIAutomation）
 
 ## FAQ
