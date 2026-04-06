@@ -115,7 +115,7 @@ def main():
         return
 
     max_age = config.get("inject_max_age_seconds", 28800)  # 8 hours
-    max_entries = config.get("inject_max_entries", 10)
+    max_entries = config.get("inject_max_entries", 30)
     watermark_path = log_path + ".watermark"
 
     entries = read_log_entries(log_path)
@@ -134,12 +134,26 @@ def main():
         return
 
     # Cap to the most recent N entries to avoid spam after long absences.
-    fresh = fresh[-max_entries:]
+    # When we truncate, emit a meta-marker so Claude knows context is incomplete
+    # and the dropped entries are gone for good (watermark advances past them).
+    total_fresh = len(fresh)
+    if total_fresh > max_entries:
+        fresh = fresh[-max_entries:]
+        truncated = total_fresh - max_entries
+        oldest_kept_age = format_relative(now - fresh[0]["ts"])
+        marker = (
+            f"[cinder-capture] {truncated} earlier Cinder messages within the "
+            f"{max_age}s window were truncated to fit inject_max_entries={max_entries}; "
+            f"oldest shown is {oldest_kept_age}. Earlier context is unrecoverable."
+        )
+        lines = [marker]
+    else:
+        lines = []
 
-    lines = [
+    lines.extend(
         f"[Cinder] ({format_relative(now - e['ts'])}) {e['text']}"
         for e in fresh
-    ]
+    )
     sys.stdout.write("\n".join(lines) + "\n")
     sys.stdout.flush()
 
