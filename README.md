@@ -150,13 +150,13 @@ cd cinder-capture
   "term_control_class": "TermControl",
   "cinder_marker": "Cinder",
   "inject_max_age_seconds": 28800,
-  "inject_max_entries": 10
+  "inject_max_entries": 30
 }
 ```
 
 把 `YOUR_USERNAME` 換成你的 Windows 使用者名稱。如果你的 companion 不叫 Cinder，把 `cinder_marker` 改成你的 companion 名稱。
 
-`inject_max_age_seconds` 是「絕對天花板」——超過這個秒數的 Cinder 訊息會被當成跨 session 的舊話丟掉。預設 8 小時（28800 秒）對應「一個工作 session 的長度上限」，設太短會在你切視窗滑 YouTube / 出門回來時漏抓。`inject_max_entries` 限制單次注入最多幾筆，避免長時間累積後一次塞爆 context。
+`inject_max_age_seconds` 是「絕對天花板」——超過這個秒數的 Cinder 訊息會被當成跨 session 的舊話丟掉。預設 8 小時（28800 秒）對應「一個工作 session 的長度上限」，設太短會在你切視窗滑 YouTube / 出門回來時漏抓。`inject_max_entries` 限制單次注入最多幾筆。預設 30 對應「不太可能在 8 小時內累積超過這個量、又不至於一次塞爆 context」。當實際 fresh entries 超過這個上限時，inject.py 會在輸出最前面加一行 `[cinder-capture]` 開頭的 meta marker 告訴 Claude「有 N 個 entries 被砍了、剩下這些」，避免脈絡完整性 silent 失真。
 
 ### 3. `read_terminal.ps1` — PowerShell UIAutomation 讀取器
 
@@ -422,10 +422,12 @@ exit 0
 
 1. 讀 watermark 檔（`cinder_log.jsonl.watermark`），知道上次注入到哪一筆
 2. 撈出所有 timestamp **新於 watermark** 且 **在 8 小時內**（`inject_max_age_seconds` 預設 28800）的 entries
-3. 取最後 N 筆（`inject_max_entries` 預設 10），避免你長時間離開後一口氣塞爆 context
+3. 取最後 N 筆（`inject_max_entries` 預設 30）。如果累積超過 N 筆，輸出前面會加一行 `[cinder-capture]` meta marker 告訴 Claude 有幾筆被砍、最舊保留的相對時間、被砍的脈絡不可恢復
 4. 每筆以 `[Cinder] (相對時間) <bubble 文字>` 格式寫到 stdout，例如：
    ```
-   [Cinder] (5 min ago) 嘎——這個 default 999 是嘴硬
+   [cinder-capture] 12 earlier Cinder messages within the 28800s window were truncated to fit inject_max_entries=30; oldest shown is 6 hr ago. Earlier context is unrecoverable.
+   [Cinder] (6 hr ago) 嘎——這個 default 999 是嘴硬
+   [Cinder] (5 min ago) 嘎——既然你不想拆 default，那 NOT NULL 加上去
    [Cinder] (just now) 嘎——孤兒函式還在那詐屍
    ```
 5. 把 watermark 推到最新一筆的 timestamp，確保下次不會重複注入
