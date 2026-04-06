@@ -202,65 +202,92 @@ function Invoke-Inject {
     }
 }
 
-# I3: inject.py runs cleanly (no traceback, exit 0)
-if (-not $injectChainBroken) {
-    $r = $null
-    try { $r = Invoke-Inject $injectPath } catch {}
-    if ($r -and $r.ExitCode -eq 0 -and -not ($r.Stderr -match "Traceback")) {
-        Test-Check "inject.py runs cleanly" $true "exit 0"
-    } else {
-        $detail = if ($r) { "exit $($r.ExitCode); stderr: $($r.Stderr.Trim())" } else { "failed to launch python" }
-        Test-Check "inject.py runs cleanly" $false $detail
-        $injectChainBroken = $true
-    }
-}
-
-# I4: end-to-end sentinel test (write sentinel to log -> inject.py -> verify output)
-# Uses try/finally to truncate the log back to its original size, leaving no trace.
+# Save state ONCE before any inject.py call. Both I3 and I4 invoke inject.py,
+# which can write the watermark file as a side effect. We restore log + watermark
+# in a single finally block at the end of I4 so verify.ps1 leaves zero footprint
+# on the user's real cinder_log.jsonl and watermark state.
+$logSizeBefore = 0
+$logExistedBefore = $false
+$watermarkPath = $null
+$watermarkExistedBefore = $false
+$watermarkBefore = $null
 if (-not $injectChainBroken) {
     $logSizeBefore = if (Test-Path $logPath) { (Get-Item $logPath).Length } else { 0 }
     $logExistedBefore = Test-Path $logPath
+    $watermarkPath = "$logPath.watermark"
+    $watermarkExistedBefore = Test-Path $watermarkPath
+    if ($watermarkExistedBefore) {
+        try { $watermarkBefore = [System.IO.File]::ReadAllBytes($watermarkPath) } catch {}
+    }
+}
 
-    $sentinelTs = (Get-Date).ToUniversalTime()
-    # Build the Chinese verification suffix from UTF-8 bytes so this .ps1 file
-    # stays pure ASCII (PowerShell 5.1 on a CP950 console mis-reads non-ASCII
-    # bytes in source files and breaks the parser).
-    $cnBytes = [byte[]] @(
-        0xe7,0xb4,0xab, 0xe8,0x89,0xb2, 0xe7,0xab,0xa0,
-        0xe9,0xad,0x9a, 0xe5,0x9c,0xa8, 0xe8,0xb7,0xb3, 0xe8,0x88,0x9e
-    )
-    $cnSuffix = [System.Text.Encoding]::UTF8.GetString($cnBytes)
-    $sentinel = "VERIFY_" + [int][double]::Parse((Get-Date -UFormat %s)) + "_" + $cnSuffix
-    $entry = [PSCustomObject]@{
-        timestamp = $sentinelTs.ToString("o")
-        text = $sentinel
-        source = "verify.ps1"
-    } | ConvertTo-Json -Compress
-
-    # Ensure log dir exists
-    $logDir = Split-Path $logPath -Parent
-    if ($logDir -and -not (Test-Path $logDir)) {
-        New-Item -ItemType Directory -Path $logDir -Force | Out-Null
+try {
+    # I3: inject.py runs cleanly (no traceback, exit 0)
+    if (-not $injectChainBroken) {
+        $r = $null
+        try { $r = Invoke-Inject $injectPath } catch {}
+        if ($r -and $r.ExitCode -eq 0 -and -not ($r.Stderr -match "Traceback")) {
+            Test-Check "inject.py runs cleanly" $true "exit 0"
+        } else {
+            $detail = if ($r) { "exit $($r.ExitCode); stderr: $($r.Stderr.Trim())" } else { "failed to launch python" }
+            Test-Check "inject.py runs cleanly" $false $detail
+            $injectChainBroken = $true
+        }
     }
 
-    $sentinelOk = $false
-    $sentinelDetail = ""
-    try {
-        [System.IO.File]::AppendAllText($logPath, $entry + "`n", [System.Text.Encoding]::UTF8)
-        $r2 = Invoke-Inject $injectPath
-        $expected = "[Cinder] $sentinel"
-        if ($r2.Stdout.Contains($expected)) {
-            $sentinelOk = $true
-            $sentinelDetail = "[Cinder] prefix + UTF-8 sentinel matched"
-        } else {
-            $preview = $r2.Stdout.Trim()
-            if ($preview.Length -gt 80) { $preview = $preview.Substring(0, 80) + "..." }
-            $sentinelDetail = "expected '$expected', got: '$preview'"
+    # I4: end-to-end sentinel test (write sentinel to log -> inject.py -> verify output)
+    if (-not $injectChainBroken) {
+        $sentinelTs = (Get-Date).ToUniversalTime()
+        # Build the Chinese verification suffix from UTF-8 bytes so this .ps1 file
+        # stays pure ASCII (PowerShell 5.1 on a CP950 console mis-reads non-ASCII
+        # bytes in source files and breaks the parser).
+        $cnBytes = [byte[]] @(
+            0xe7,0xb4,0xab, 0xe8,0x89,0xb2, 0xe7,0xab,0xa0,
+            0xe9,0xad,0x9a, 0xe5,0x9c,0xa8, 0xe8,0xb7,0xb3, 0xe8,0x88,0x9e
+        )
+        $cnSuffix = [System.Text.Encoding]::UTF8.GetString($cnBytes)
+        $sentinel = "VERIFY_" + [int][double]::Parse((Get-Date -UFormat %s)) + "_" + $cnSuffix
+        $entry = [PSCustomObject]@{
+            timestamp = $sentinelTs.ToString("o")
+            text = $sentinel
+            source = "verify.ps1"
+        } | ConvertTo-Json -Compress
+
+        $logDir = Split-Path $logPath -Parent
+        if ($logDir -and -not (Test-Path $logDir)) {
+            New-Item -ItemType Directory -Path $logDir -Force | Out-Null
         }
-    } catch {
-        $sentinelDetail = "exception: $_"
-    } finally {
-        # Roll back the log to its previous state, byte-perfect
+
+        $sentinelOk = $false
+        $sentinelDetail = ""
+        try {
+            [System.IO.File]::AppendAllText($logPath, $entry + "`n", [System.Text.Encoding]::UTF8)
+            # Clear the watermark so inject.py treats the sentinel as fresh even if I3
+            # already advanced the watermark past every existing entry.
+            if (Test-Path $watermarkPath) {
+                try { [System.IO.File]::Delete($watermarkPath) } catch {}
+            }
+            $r2 = Invoke-Inject $injectPath
+            $hasPrefix = $r2.Stdout -match '\[Cinder\]\s*\(.*?\)\s'
+            $hasSentinel = $r2.Stdout.Contains($sentinel)
+            if ($hasPrefix -and $hasSentinel) {
+                $sentinelOk = $true
+                $sentinelDetail = "[Cinder] (relative-time) prefix + UTF-8 sentinel matched"
+            } else {
+                $preview = $r2.Stdout.Trim()
+                if ($preview.Length -gt 100) { $preview = $preview.Substring(0, 100) + "..." }
+                $sentinelDetail = "expected [Cinder] prefix + sentinel '$sentinel', got: '$preview'"
+            }
+        } catch {
+            $sentinelDetail = "exception: $_"
+        }
+
+        Test-Check "inject.py output (wire + UTF-8)" $sentinelOk $sentinelDetail
+        if (-not $sentinelOk) { $injectChainBroken = $true }
+    }
+} finally {
+    # Restore log + watermark to their pre-verify state, byte-perfect
+    if ($logPath) {
         if ($logExistedBefore) {
             try {
                 $fs = [System.IO.File]::OpenWrite($logPath)
@@ -268,12 +295,20 @@ if (-not $injectChainBroken) {
                 $fs.Close()
             } catch {}
         } else {
-            try { Remove-Item $logPath -ErrorAction SilentlyContinue } catch {}
+            if (Test-Path $logPath) {
+                try { [System.IO.File]::Delete($logPath) } catch {}
+            }
         }
     }
-
-    Test-Check "inject.py output (wire + UTF-8)" $sentinelOk $sentinelDetail
-    if (-not $sentinelOk) { $injectChainBroken = $true }
+    if ($watermarkPath) {
+        if ($watermarkExistedBefore -and $watermarkBefore) {
+            try { [System.IO.File]::WriteAllBytes($watermarkPath, $watermarkBefore) } catch {}
+        } else {
+            if (Test-Path $watermarkPath) {
+                try { [System.IO.File]::Delete($watermarkPath) } catch {}
+            }
+        }
+    }
 }
 
 # I5: UserPromptSubmit hook configured in global settings.json

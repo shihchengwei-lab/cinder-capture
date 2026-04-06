@@ -4,5 +4,6 @@
   "terminal_class": "CASCADIA_HOSTING_WINDOW_CLASS",
   "term_control_class": "TermControl",
   "cinder_marker": "Cinder",
-  "inject_max_age_seconds": 120
+  "inject_max_age_seconds": 28800,
+  "inject_max_entries": 10
 }
