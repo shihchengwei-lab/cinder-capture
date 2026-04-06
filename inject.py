@@ -7,6 +7,13 @@ from datetime import datetime, timezone
 CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
 
 def main():
+    # Force UTF-8 stdout — on Windows, Python defaults to the system code page
+    # (e.g. CP950) which corrupts non-ASCII Cinder text the harness expects as UTF-8.
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", newline="\n")
+    except Exception:
+        pass
+
     # Read stdin first (hook input) — must consume it
     try:
         sys.stdin.read()
@@ -53,9 +60,8 @@ def main():
     except (ValueError, TypeError):
         return
 
-    # Output additionalContext — use print + flush to ensure delivery
-    output = json.dumps({"additionalContext": f"[Cinder] {text}"}, ensure_ascii=False)
-    sys.stdout.write(output)
+    # Plain text on stdout (exit 0) becomes additionalContext per Claude Code hook contract.
+    sys.stdout.write(f"[Cinder] {text}\n")
     sys.stdout.flush()
 
 
