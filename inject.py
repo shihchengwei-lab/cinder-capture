@@ -68,7 +68,7 @@ def read_log_entries(log_path):
     """Return a list of {'text', 'ts'} dicts from the log, skipping malformed lines."""
     entries = []
     try:
-        with open(log_path, "r", encoding="utf-8") as f:
+        with open(log_path, "r", encoding="utf-8-sig") as f:
             for line in f:
                 line = line.strip()
                 if not line:
